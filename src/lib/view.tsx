@@ -170,6 +170,8 @@ type ViewValue = {
   openAddonDetail: (id: string) => void;
   canGoBack: boolean;
   goBack: () => void;
+  canGoForward: boolean;
+  goForward: () => void;
   exitPlayback: () => void;
   exitPickerToDetail: (m: Meta) => void;
   exitPlayer: () => void;
@@ -190,6 +192,21 @@ function pushFrame(cur: Frame[], next: Frame): Frame[] {
   const out = [...cur, next];
   if (out.length <= STACK_MAX) return out;
   return [out[0], ...out.slice(out.length - STACK_MAX + 1)];
+}
+
+type NavState = { history: Frame[]; cursor: number };
+
+/** Push a new frame: truncate any forward history, append, advance cursor. */
+function pushNav(s: NavState, frame: Frame): NavState {
+  const history = [...s.history.slice(0, s.cursor + 1), frame];
+  if (history.length <= STACK_MAX) return { history, cursor: history.length - 1 };
+  const trimmed = history.slice(history.length - STACK_MAX);
+  return { history: trimmed, cursor: STACK_MAX - 1 };
+}
+
+/** Reset to a single root frame (clears all history). */
+function resetNav(frame: Frame): NavState {
+  return { history: [frame], cursor: 0 };
 }
 
 function frameKey(f: Frame): string {
@@ -283,7 +300,8 @@ function lastOfKind<K extends Frame["kind"]>(
 }
 
 export function ViewProvider({ children }: { children: ReactNode }) {
-  const [stack, setStack] = useState<Frame[]>([{ kind: "home" }]);
+  const [nav, setNav] = useState<NavState>({ history: [{ kind: "home" }], cursor: 0 });
+  const stack = useMemo(() => nav.history.slice(0, nav.cursor + 1), [nav.history, nav.cursor]);
   const [chromeHidden, setChromeHidden] = useState(false);
   const [homeResetTick, setHomeResetTick] = useState(0);
   const scrollMem = useRef<Map<string, ScrollSnapshot>>(new Map());
@@ -370,41 +388,45 @@ export function ViewProvider({ children }: { children: ReactNode }) {
       ? { meta: top.meta, episode: top.episode, autoPlay: top.autoPlay, attempt: top.attempt, intent: top.intent, resume: top.resume }
       : null;
   const player = top.kind === "player" ? top.src : null;
-  const canGoBack = stack.length > 1;
+  const canGoBack = nav.cursor > 0;
+  const canGoForward = nav.cursor < nav.history.length - 1;
 
   const pop = useCallback(() => {
-    setStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
+    setNav((s) => ({ ...s, cursor: Math.max(0, s.cursor - 1) }));
+  }, []);
+
+  const goForward = useCallback(() => {
+    setNav((s) => ({ ...s, cursor: Math.min(s.history.length - 1, s.cursor + 1) }));
   }, []);
 
   const exitPlayback = useCallback(() => {
-    setStack((s) => {
-      let i = s.length - 1;
-      while (i > 0 && (s[i].kind === "player" || s[i].kind === "picker")) i--;
-      return s.slice(0, i + 1);
+    setNav((s) => {
+      let i = s.cursor;
+      while (i > 0 && (s.history[i].kind === "player" || s.history[i].kind === "picker")) i--;
+      return { ...s, cursor: i };
     });
   }, []);
 
   const exitPickerToDetail = useCallback((m: Meta) => {
-    setStack((s) => {
-      let i = s.length - 1;
-      while (i > 0 && (s[i].kind === "player" || s[i].kind === "picker")) i--;
-      const base = s.slice(0, i + 1);
-      const top = base[base.length - 1];
-      if (top && top.kind === "meta") return base;
-      return [...base, { kind: "meta", meta: m }];
+    setNav((s) => {
+      let i = s.cursor;
+      while (i > 0 && (s.history[i].kind === "player" || s.history[i].kind === "picker")) i--;
+      const top = s.history[i];
+      if (top && top.kind === "meta") return { ...s, cursor: i };
+      return pushNav({ ...s, cursor: i }, { kind: "meta", meta: m });
     });
   }, []);
 
   const exitPlayer = useCallback(() => {
-    setStack((s) => {
-      let i = s.length - 1;
-      while (i > 0 && s[i].kind === "player") i--;
-      const next = s.slice(0, i + 1);
-      const top = next[next.length - 1];
+    setNav((s) => {
+      let i = s.cursor;
+      while (i > 0 && s.history[i].kind === "player") i--;
+      const history = [...s.history];
+      const top = history[i];
       if (top && top.kind === "picker" && top.autoPlay) {
-        next[next.length - 1] = { ...top, autoPlay: false };
+        history[i] = { ...top, autoPlay: false };
       }
-      return next;
+      return { ...s, history, cursor: i };
     });
   }, []);
 
@@ -428,123 +450,123 @@ export function ViewProvider({ children }: { children: ReactNode }) {
       window.requestAnimationFrame(fireScrollTop);
       window.setTimeout(fireScrollTop, 60);
     }
-    setStack((s) => {
-      const t = s[s.length - 1];
+    setNav((s) => {
+      const t = s.history[s.cursor];
       if (v === "home") {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return [{ kind: "home" }];
+        return resetNav({ kind: "home" });
       }
       if (v === "anime") {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return [{ kind: "anime" }];
+        return resetNav({ kind: "anime" });
       }
       if (v === "discover") {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return [{ kind: "discover" }];
+        return resetNav({ kind: "discover" });
       }
       if (v === "addons") {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return [{ kind: "addons" }];
+        return resetNav({ kind: "addons" });
       }
       if (v === "calendar") {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return [{ kind: "calendar" }];
+        return resetNav({ kind: "calendar" });
       }
       if (v === "downloads") {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return [{ kind: "downloads" }];
+        return resetNav({ kind: "downloads" });
       }
       if (v === "movies") {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return [{ kind: "movies" }];
+        return resetNav({ kind: "movies" });
       }
       if (v === "shows") {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return [{ kind: "shows" }];
+        return resetNav({ kind: "shows" });
       }
       if (v === "kids") {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return [{ kind: "kids" }];
+        return resetNav({ kind: "kids" });
       }
       if (v === "library") {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return [{ kind: "library" }];
+        return resetNav({ kind: "library" });
       }
       if (v === "live") {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return [{ kind: "live" }];
+        return resetNav({ kind: "live" });
       }
       if (v === "vod") {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return [{ kind: "vod" }];
+        return resetNav({ kind: "vod" });
       }
       if (t.kind === "settings") return s;
-      return pushFrame(s, { kind: "settings" });
+      return pushNav(s, { kind: "settings" });
     });
   }, []);
 
   const openSettings = useCallback((section?: SettingsSection) => {
     setSectionReq((r) => ({ section: section ?? null, nonce: r.nonce + 1 }));
-    setStack((s) => {
-      const t = s[s.length - 1];
+    setNav((s) => {
+      const t = s.history[s.cursor];
       if (t.kind === "settings") return s;
-      return pushFrame(s, { kind: "settings" });
+      return pushNav(s, { kind: "settings" });
     });
   }, []);
 
   const openService = useCallback((s: StreamingService | null) => {
     if (s === null) {
-      setStack((cur) => {
+      setNav(() => {
         scrollMem.current.clear();
         rowScrollMem.current.clear();
-        return cur.length === 1 && cur[0].kind === "home" ? cur : [{ kind: "home" }];
+        return resetNav({ kind: "home" });
       });
       return;
     }
-    setStack((cur) => {
-      const t = cur[cur.length - 1];
+    setNav((cur) => {
+      const t = cur.history[cur.cursor];
       if (t.kind === "service" && t.service === s) return cur;
-      return pushFrame(cur, { kind: "service", service: s });
+      return pushNav(cur, { kind: "service", service: s });
     });
   }, []);
 
   const promoteMetaToRoot = useCallback(() => {
-    setStack((s) => {
-      if (s.length === 0) return s;
-      const top = s[s.length - 1];
+    setNav((s) => {
+      if (s.history.length === 0) return s;
+      const top = s.history[s.cursor];
       if (top.kind !== "meta") return s;
       const m = top.meta;
       let root: Frame;
       if (m.type === "series" || m.type === "tv") root = { kind: "shows" };
       else if (m.type === "anime") root = { kind: "anime" };
       else root = { kind: "movies" };
-      return [root, { kind: "meta", meta: m }];
+      return { history: [root, { kind: "meta", meta: m }], cursor: 1 };
     });
   }, []);
 
   const openMeta = useCallback(
     (m: Meta | null, opts?: { liveContext?: boolean; episodeHint?: { season: number; episode: number } }) => {
       if (m === null) {
-        setStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
+        setNav((s) => ({ ...s, cursor: Math.max(0, s.cursor - 1) }));
         return;
       }
-      setStack((cur) => {
-        const t = cur[cur.length - 1];
+      setNav((cur) => {
+        const t = cur.history[cur.cursor];
         if (t.kind === "meta" && t.meta.id === m.id) return cur;
         trackEvent(m.id, "open", profileFromMeta(m));
-        return pushFrame(cur, {
+        return pushNav(cur, {
           kind: "meta",
           meta: m,
           liveContext: opts?.liveContext,
@@ -557,44 +579,44 @@ export function ViewProvider({ children }: { children: ReactNode }) {
 
   const openPerson = useCallback((id: number | null) => {
     if (id === null) {
-      setStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
+      setNav((s) => ({ ...s, cursor: Math.max(0, s.cursor - 1) }));
       return;
     }
-    setStack((cur) => {
-      const t = cur[cur.length - 1];
+    setNav((cur) => {
+      const t = cur.history[cur.cursor];
       if (t.kind === "person" && t.id === id) return cur;
-      return pushFrame(cur, { kind: "person", id });
+      return pushNav(cur, { kind: "person", id });
     });
   }, []);
 
   const openQueue = useCallback(() => {
-    setStack((cur) => {
-      const t = cur[cur.length - 1];
+    setNav((cur) => {
+      const t = cur.history[cur.cursor];
       if (t.kind === "queue") return cur;
-      return pushFrame(cur, { kind: "queue" });
+      return pushNav(cur, { kind: "queue" });
     });
   }, []);
 
   const openCollection = useCallback((id: number) => {
-    setStack((cur) => {
-      const t = cur[cur.length - 1];
+    setNav((cur) => {
+      const t = cur.history[cur.cursor];
       if (t.kind === "collection" && t.id === id) return cur;
-      return pushFrame(cur, { kind: "collection", id });
+      return pushNav(cur, { kind: "collection", id });
     });
   }, []);
 
   const openMatchDetail = useCallback((game: SportsGame) => {
-    setStack((cur) => {
-      const t = cur[cur.length - 1];
+    setNav((cur) => {
+      const t = cur.history[cur.cursor];
       if (t.kind === "match-detail" && t.game.id === game.id) return cur;
-      return pushFrame(cur, { kind: "match-detail", game });
+      return pushNav(cur, { kind: "match-detail", game });
     });
   }, []);
 
   const openEpisodeDetail = useCallback(
     (seriesId: string, season: number, episode: number, seriesMeta?: Meta) => {
-      setStack((cur) => {
-        const t = cur[cur.length - 1];
+      setNav((cur) => {
+        const t = cur.history[cur.cursor];
         if (
           t.kind === "episode-detail" &&
           t.seriesId === seriesId &&
@@ -603,31 +625,31 @@ export function ViewProvider({ children }: { children: ReactNode }) {
         ) {
           return cur;
         }
-        return pushFrame(cur, { kind: "episode-detail", seriesId, season, episode, seriesMeta });
+        return pushNav(cur, { kind: "episode-detail", seriesId, season, episode, seriesMeta });
       });
     },
     [],
   );
 
   const openAward = useCallback((t: import("./providers/wikidata").AwardType) => {
-    setStack((cur) => {
-      const top = cur[cur.length - 1];
+    setNav((cur) => {
+      const top = cur.history[cur.cursor];
       if (top.kind === "award" && top.awardType === t) return cur;
-      return pushFrame(cur, { kind: "award", awardType: t });
+      return pushNav(cur, { kind: "award", awardType: t });
     });
   }, []);
 
   const openAnimeAward = useCallback((s: import("./anime-awards").AwardSourceId) => {
-    setStack((cur) => {
-      const top = cur[cur.length - 1];
+    setNav((cur) => {
+      const top = cur.history[cur.cursor];
       if (top.kind === "anime-award" && top.sourceId === s) return cur;
-      return pushFrame(cur, { kind: "anime-award", sourceId: s });
+      return pushNav(cur, { kind: "anime-award", sourceId: s });
     });
   }, []);
 
   const openFilter = useCallback((f: MetaFilter) => {
-    setStack((cur) => {
-      const t = cur[cur.length - 1];
+    setNav((cur) => {
+      const t = cur.history[cur.cursor];
       if (
         t.kind === "filter" &&
         t.filter.kind === f.kind &&
@@ -636,31 +658,31 @@ export function ViewProvider({ children }: { children: ReactNode }) {
       ) {
         return cur;
       }
-      return pushFrame(cur, { kind: "filter", filter: f });
+      return pushNav(cur, { kind: "filter", filter: f });
     });
   }, []);
 
   const openGrid = useCallback((g: GridSpec) => {
-    setStack((cur) => {
-      const t = cur[cur.length - 1];
+    setNav((cur) => {
+      const t = cur.history[cur.cursor];
       if (t.kind === "grid" && t.grid.title === g.title) return cur;
-      return pushFrame(cur, { kind: "grid", grid: g });
+      return pushNav(cur, { kind: "grid", grid: g });
     });
   }, []);
 
   const openCollections = useCallback(() => {
-    setStack((cur) => {
-      const t = cur[cur.length - 1];
+    setNav((cur) => {
+      const t = cur.history[cur.cursor];
       if (t.kind === "collections") return cur;
-      return pushFrame(cur, { kind: "collections" });
+      return pushNav(cur, { kind: "collections" });
     });
   }, []);
 
   const openPicker = useCallback(
     (m: Meta, ep?: PlayEpisode, opts?: { autoPlay?: boolean; attempt?: number; intent?: "play" | "download"; resume?: boolean }) => {
       if (opts?.autoPlay && getWindowFullscreen()) suppressFullscreenExitOnce();
-      setStack((cur) => {
-        const t = cur[cur.length - 1];
+      setNav((cur) => {
+        const t = cur.history[cur.cursor];
         if (
           t.kind === "picker" &&
           t.meta.id === m.id &&
@@ -669,7 +691,7 @@ export function ViewProvider({ children }: { children: ReactNode }) {
         ) {
           return cur;
         }
-        return pushFrame(cur, {
+        return pushNav(cur, {
           kind: "picker",
           meta: m,
           episode: ep,
@@ -695,7 +717,7 @@ export function ViewProvider({ children }: { children: ReactNode }) {
       setPendingLiveSrc(src);
       return;
     }
-    setStack((cur) => pushFrame(cur, { kind: "player", src }));
+    setNav((cur) => pushNav(cur, { kind: "player", src }));
   }, []);
 
   const confirmLeavePartyForLive = useCallback(() => {
@@ -703,25 +725,31 @@ export function ViewProvider({ children }: { children: ReactNode }) {
     setPendingLiveSrc(null);
     if (!src) return;
     togetherRef.current.leaveSession();
-    setStack((cur) => pushFrame(cur, { kind: "player", src }));
+    setNav((cur) => pushNav(cur, { kind: "player", src }));
   }, []);
 
   const cancelLeavePartyForLive = useCallback(() => setPendingLiveSrc(null), []);
 
   const replacePlayerSrc = useCallback((src: PlayerSrc) => {
-    setStack((cur) => {
-      const top = cur[cur.length - 1];
-      if (top.kind !== "player") return cur;
-      return [...cur.slice(0, -1), { kind: "player", src }];
+    setNav((s) => {
+      const top = s.history[s.cursor];
+      if (top.kind !== "player") return s;
+      const history = [...s.history];
+      history[s.cursor] = { kind: "player", src };
+      return { ...s, history };
     });
   }, []);
 
   const openAddonDetail = useCallback((id: string) => {
-    setStack((cur) => {
-      const top = cur[cur.length - 1];
+    setNav((cur) => {
+      const top = cur.history[cur.cursor];
       if (top.kind === "addon-detail" && top.id === id) return cur;
-      if (top.kind === "addon-detail") return [...cur.slice(0, -1), { kind: "addon-detail", id }];
-      return pushFrame(cur, { kind: "addon-detail", id });
+      if (top.kind === "addon-detail") {
+        const history = [...cur.history];
+        history[cur.cursor] = { kind: "addon-detail", id };
+        return { ...cur, history };
+      }
+      return pushNav(cur, { kind: "addon-detail", id });
     });
   }, []);
 
@@ -778,6 +806,8 @@ export function ViewProvider({ children }: { children: ReactNode }) {
       openAddonDetail,
       canGoBack,
       goBack: pop,
+      canGoForward,
+      goForward,
       exitPlayback,
       exitPickerToDetail,
       exitPlayer,
@@ -811,6 +841,7 @@ export function ViewProvider({ children }: { children: ReactNode }) {
       picker,
       player,
       canGoBack,
+      canGoForward,
       setView,
       openSettings,
       sectionReq,
@@ -831,6 +862,7 @@ export function ViewProvider({ children }: { children: ReactNode }) {
       confirmLeavePartyForLive,
       cancelLeavePartyForLive,
       pop,
+      goForward,
       exitPlayback,
       exitPickerToDetail,
       exitPlayer,

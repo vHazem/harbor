@@ -402,7 +402,7 @@ function parseDeepLinkEpisode(videoId?: string): { season: number; episode: numb
 }
 
 function Shell() {
-  const { topKind, service, meta, metaLiveContext, metaEpisodeHint, episodeDetail, personId, collectionId, filter, grid, awardType, animeAwardSource, picker, player, setView, goBack, openMeta, stackKinds, chromeHidden } = useView();
+  const { topKind, service, meta, metaLiveContext, metaEpisodeHint, episodeDetail, personId, collectionId, filter, grid, awardType, animeAwardSource, picker, player, setView, goBack, goForward, openMeta, stackKinds, chromeHidden } = useView();
   const { settings, update } = useSettings();
   const uiScaleRef = useRef(settings.uiScale);
   const { activeProfile } = useProfiles();
@@ -496,6 +496,24 @@ function Shell() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  useEffect(() => {
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button === 3) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (player || picker) return;
+        goBack();
+      } else if (e.button === 4) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (player || picker) return;
+        goForward();
+      }
+    };
+    window.addEventListener("mousedown", onMouseDown, true);
+    return () => window.removeEventListener("mousedown", onMouseDown, true);
+  }, [player, picker, goBack, goForward]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
